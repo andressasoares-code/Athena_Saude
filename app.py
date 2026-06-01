@@ -1,0 +1,645 @@
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import os
+import glob
+from datetime import date
+import calendar
+
+# ─────────────────────────────────────────────────────────────
+#  CONFIG
+# ─────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Athena Saúde — Contas a Receber",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ─────────────────────────────────────────────────────────────
+#  THEME / COLORS
+# ─────────────────────────────────────────────────────────────
+ATHENA_BLUE     = "#1B3A6B"
+ATHENA_MID      = "#2558A8"
+ATHENA_SKY      = "#4A90D9"
+ATHENA_GOLD     = "#C9A84C"
+ATHENA_GREEN    = "#27AE60"
+ATHENA_RED      = "#E74C3C"
+ATHENA_ORANGE   = "#E67E22"
+SURFACE         = "#F4F7FC"
+BORDER          = "#DDE4F0"
+
+AGING_ORDER = [
+    "To due",
+    "0 to 30 days",
+    "31 to 60 days",
+    "61 to 90 days",
+    "91 to 120 days",
+    "121 to 180 days",
+    "181 to 360 days",
+    "Over 365 days",
+]
+
+AGING_COLORS = {
+    "To due":          "#E74C3C",
+    "0 to 30 days":    "#F39C12",
+    "31 to 60 days":   "#F1C40F",
+    "61 to 90 days":   "#2ECC71",
+    "91 to 120 days":  "#1ABC9C",
+    "121 to 180 days": "#3498DB",
+    "181 to 360 days": "#9B59B6",
+    "Over 365 days":   "#7F8C8D",
+}
+
+MONTH_ORDER = [
+    "JANEIRO","FEVEREIRO","MARÇO","ABRIL","MAIO","JUNHO",
+    "JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO",
+]
+
+MONTH_LAST_DAY = {
+    "JANEIRO":  31, "FEVEREIRO": 28, "MARÇO":    31, "ABRIL":    30,
+    "MAIO":     31, "JUNHO":     30, "JULHO":    31, "AGOSTO":   31,
+    "SETEMBRO": 30, "OUTUBRO":   31, "NOVEMBRO": 30, "DEZEMBRO": 31,
+}
+
+MONTH_DETECT = {
+    "JANEIRO":"JANEIRO","JAN":"JANEIRO",
+    "FEVEREIRO":"FEVEREIRO","FEV":"FEVEREIRO","FEB":"FEVEREIRO",
+    "MARÇO":"MARÇO","MARCO":"MARÇO","MAR":"MARÇO",
+    "ABRIL":"ABRIL","ABR":"ABRIL","APR":"ABRIL",
+    "MAIO":"MAIO","MAI":"MAIO","MAY":"MAIO",
+    "JUNHO":"JUNHO","JUN":"JUNHO",
+    "JULHO":"JULHO","JUL":"JULHO",
+    "AGOSTO":"AGOSTO","AGO":"AGOSTO","AUG":"AGOSTO",
+    "SETEMBRO":"SETEMBRO","SET":"SETEMBRO","SEP":"SETEMBRO",
+    "OUTUBRO":"OUTUBRO","OUT":"OUTUBRO","OCT":"OUTUBRO",
+    "NOVEMBRO":"NOVEMBRO","NOV":"NOVEMBRO",
+    "DEZEMBRO":"DEZEMBRO","DEZ":"DEZEMBRO","DEC":"DEZEMBRO",
+}
+
+# ─────────────────────────────────────────────────────────────
+#  CUSTOM CSS
+# ─────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+
+/* Header */
+.athena-header {
+    background: linear-gradient(135deg, #1B3A6B 0%, #2558A8 60%, #4A90D9 100%);
+    border-radius: 14px;
+    padding: 22px 32px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 24px rgba(27,58,107,0.25);
+}
+.athena-logo-mark {
+    width: 52px; height: 52px;
+    background: white;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 700;
+    color: #1B3A6B;
+    font-family: 'Playfair Display', serif;
+    flex-shrink: 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.athena-brand { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: white; line-height: 1.1; }
+.athena-sub { font-size: 11px; color: rgba(255,255,255,0.7); letter-spacing: 1.5px; text-transform: uppercase; margin-top: 3px; }
+
+/* KPI cards */
+.kpi-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px 22px;
+    border-left: 4px solid #1B3A6B;
+    box-shadow: 0 2px 12px rgba(27,58,107,0.09);
+}
+.kpi-card.danger  { border-left-color: #E74C3C; }
+.kpi-card.warn    { border-left-color: #E67E22; }
+.kpi-card.success { border-left-color: #27AE60; }
+.kpi-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #5B6E8A; margin-bottom: 6px; }
+.kpi-value { font-size: 24px; font-weight: 700; color: #1A2537; font-family: 'Playfair Display', serif; line-height: 1; }
+.kpi-sub   { font-size: 11px; color: #5B6E8A; margin-top: 5px; }
+.delta-up   { color: #E74C3C; font-weight: 600; }
+.delta-down { color: #27AE60; font-weight: 600; }
+
+/* Section title */
+.section-title {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #5B6E8A;
+    border-bottom: 2px solid #E8F0FB;
+    padding-bottom: 6px; margin-bottom: 16px;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] { background: #F4F7FC; }
+section[data-testid="stSidebar"] .stMultiSelect label { font-size: 12px; font-weight: 600; color: #1B3A6B; }
+
+/* Variation blocks */
+.var-block {
+    border-radius: 10px; padding: 16px; text-align: center;
+}
+.var-novos   { background: rgba(39,174,96,0.08);  border: 1.5px solid rgba(39,174,96,0.25); }
+.var-aberto  { background: rgba(74,144,217,0.08); border: 1.5px solid rgba(74,144,217,0.25); }
+.var-completo{ background: rgba(201,168,76,0.10); border: 1.5px solid rgba(201,168,76,0.30); }
+.var-label-novos    { color: #27AE60; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
+.var-label-aberto   { color: #4A90D9; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
+.var-label-completo { color: #C9A84C; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
+.var-value { font-size: 20px; font-weight: 700; font-family: 'Playfair Display', serif; color: #1A2537; margin: 6px 0 4px; }
+.var-sub   { font-size: 11px; color: #5B6E8A; }
+
+/* Hide streamlit branding */
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding-top: 1rem; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+#  HELPERS
+# ─────────────────────────────────────────────────────────────
+def fmt_brl(v):
+    if abs(v) >= 1e6:
+        return f"R$ {v/1e6:.1f}M"
+    if abs(v) >= 1e3:
+        return f"R$ {v/1e3:.0f}K"
+    return f"R$ {v:,.0f}"
+
+def fmt_full(v):
+    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def detect_month(filename: str) -> str:
+    upper = filename.upper().replace("_", " ").replace("-", " ")
+    for key, val in MONTH_DETECT.items():
+        if key in upper:
+            return val
+    return "DESCONHECIDO"
+
+def classify_aging(days: int) -> str:
+    if days < 0:          return "To due"
+    if days <= 30:        return "0 to 30 days"
+    if days <= 60:        return "31 to 60 days"
+    if days <= 90:        return "61 to 90 days"
+    if days <= 120:       return "91 to 120 days"
+    if days <= 180:       return "121 to 180 days"
+    if days <= 360:       return "181 to 360 days"
+    return "Over 365 days"
+
+def get_ref_date(month_name: str, year: int = 2025) -> date:
+    month_num = MONTH_ORDER.index(month_name) + 1
+    last_day  = calendar.monthrange(year, month_num)[1]
+    return date(year, month_num, last_day)
+
+def load_excel(filepath: str, month_name: str) -> pd.DataFrame:
+    df = pd.read_excel(filepath, sheet_name=0)
+    df.columns = [c.strip() for c in df.columns]
+    df["VALOR BASE"] = pd.to_numeric(df["VALOR BASE"], errors="coerce").fillna(0)
+    df["DATA BASE - VENCIMENTO"] = pd.to_datetime(
+        df["DATA BASE - VENCIMENTO"], dayfirst=True, errors="coerce"
+    )
+    ref = pd.Timestamp(get_ref_date(month_name))
+    df["DIAS"] = (ref - df["DATA BASE - VENCIMENTO"]).dt.days.fillna(0).astype(int)
+    df["AGING"] = df["DIAS"].apply(classify_aging)
+    df["MES"]   = month_name
+    df["ANO"]   = "2025"
+    return df
+
+# ─────────────────────────────────────────────────────────────
+#  SESSION STATE — persistent storage of loaded months
+# ─────────────────────────────────────────────────────────────
+if "loaded_months" not in st.session_state:
+    st.session_state.loaded_months = {}   # {month_name: DataFrame}
+
+if "base_files" not in st.session_state:
+    st.session_state.base_files = {}      # {month_name: filename}
+
+# Pre-load the two embedded files on first run
+PRELOAD = {
+    "MARÇO":  "Consolidado_MARÇO.xlsx",
+    "ABRIL":  "Consolidado_ABRIL.xlsx",
+}
+for mes, fname in PRELOAD.items():
+    if mes not in st.session_state.loaded_months:
+        fpath = os.path.join(os.path.dirname(__file__), fname)
+        if os.path.exists(fpath):
+            st.session_state.loaded_months[mes] = load_excel(fpath, mes)
+            st.session_state.base_files[mes] = fname
+
+# ─────────────────────────────────────────────────────────────
+#  SIDEBAR
+# ─────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,{ATHENA_BLUE},{ATHENA_MID});
+                border-radius:10px;padding:16px;margin-bottom:20px;text-align:center">
+        <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:white">Athena Saúde</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.7);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px">Controladoria</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Import section ───────────────────────────────────────
+    st.markdown("### 📂 Importar Nova Base")
+    uploaded = st.file_uploader(
+        "Selecione o arquivo .xlsx",
+        type=["xlsx"],
+        help="Nomeie o arquivo com o mês: ex. Consolidado_MAIO.xlsx",
+        label_visibility="collapsed",
+    )
+    if uploaded:
+        month_detected = detect_month(uploaded.name)
+        st.info(f"Mês detectado: **{month_detected}**")
+        if st.button("✅ Carregar Base", use_container_width=True, type="primary"):
+            if month_detected == "DESCONHECIDO":
+                st.error("Não foi possível detectar o mês. Renomeie o arquivo com o mês.")
+            else:
+                with st.spinner(f"Processando {uploaded.name}..."):
+                    df_new = load_excel(uploaded, month_detected)
+                    st.session_state.loaded_months[month_detected] = df_new
+                    st.session_state.base_files[month_detected] = uploaded.name
+                st.success(f"✓ {month_detected} carregado com sucesso!")
+                st.rerun()
+
+    st.divider()
+
+    # ── Loaded bases ─────────────────────────────────────────
+    st.markdown("### 🗂 Bases Carregadas")
+    if not st.session_state.loaded_months:
+        st.caption("Nenhuma base carregada.")
+    else:
+        for mes in sorted(st.session_state.loaded_months.keys(),
+                          key=lambda m: MONTH_ORDER.index(m) if m in MONTH_ORDER else 99):
+            df_m = st.session_state.loaded_months[mes]
+            fname = st.session_state.base_files.get(mes, "")
+            total = df_m["VALOR BASE"].sum()
+            rows  = len(df_m)
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(f"""
+                <div style="background:white;border-radius:8px;padding:10px 12px;
+                            border:1.5px solid {BORDER};margin-bottom:6px">
+                    <div style="font-size:12px;font-weight:600;color:{ATHENA_BLUE}">{mes} 2025</div>
+                    <div style="font-size:10px;color:#5B6E8A;margin-top:2px">
+                        {rows:,} títulos · {fmt_brl(total)}
+                    </div>
+                    <div style="font-size:10px;color:#5B6E8A">{fname}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                if st.button("🗑", key=f"del_{mes}",
+                             help=f"Remover {mes}",
+                             use_container_width=True):
+                    del st.session_state.loaded_months[mes]
+                    del st.session_state.base_files[mes]
+                    st.rerun()
+
+    st.divider()
+
+    # ── Filters ──────────────────────────────────────────────
+    st.markdown("### 🎛 Filtros")
+    all_df = pd.concat(list(st.session_state.loaded_months.values()), ignore_index=True) \
+             if st.session_state.loaded_months else pd.DataFrame()
+
+    if not all_df.empty:
+        entities_all = sorted(all_df["ENTIDADE"].dropna().unique().tolist())
+        meses_all    = sorted(all_df["MES"].unique().tolist(),
+                              key=lambda m: MONTH_ORDER.index(m) if m in MONTH_ORDER else 99)
+        anos_all     = sorted(all_df["ANO"].unique().tolist())
+
+        sel_entidade = st.multiselect("Entidade",    entities_all, default=entities_all)
+        sel_mes      = st.multiselect("Mês",         meses_all,    default=meses_all)
+        sel_ano      = st.multiselect("Ano",         anos_all,     default=anos_all)
+
+        if st.button("✕ Limpar Filtros", use_container_width=True):
+            sel_entidade = entities_all
+            sel_mes      = meses_all
+            sel_ano      = anos_all
+            st.rerun()
+    else:
+        sel_entidade = sel_mes = sel_ano = []
+
+# ─────────────────────────────────────────────────────────────
+#  HEADER
+# ─────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="athena-header">
+    <div class="athena-logo-mark">A</div>
+    <div>
+        <div class="athena-brand">Athena Saúde</div>
+        <div class="athena-sub">Controladoria · Contas a Receber</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+#  GUARD — no data
+# ─────────────────────────────────────────────────────────────
+if all_df.empty:
+    st.info("Nenhuma base carregada. Importe um arquivo Excel pela barra lateral.")
+    st.stop()
+
+# ─────────────────────────────────────────────────────────────
+#  APPLY FILTERS
+# ─────────────────────────────────────────────────────────────
+df = all_df.copy()
+if sel_entidade: df = df[df["ENTIDADE"].isin(sel_entidade)]
+if sel_mes:      df = df[df["MES"].isin(sel_mes)]
+if sel_ano:      df = df[df["ANO"].isin(sel_ano)]
+
+meses_sorted = sorted(df["MES"].unique().tolist(),
+                      key=lambda m: MONTH_ORDER.index(m) if m in MONTH_ORDER else 99)
+
+# ─────────────────────────────────────────────────────────────
+#  DERIVED AGGREGATIONS
+# ─────────────────────────────────────────────────────────────
+aging_total   = df.groupby(["MES","AGING"])["VALOR BASE"].sum().reset_index()
+entity_total  = df.groupby(["MES","ENTIDADE"])["VALOR BASE"].sum().reset_index()
+entity_aging  = df.groupby(["MES","ENTIDADE","AGING"])["VALOR BASE"].sum().reset_index()
+convenio_agg  = df.groupby(["MES","ENTIDADE","CONVÊNIO"])["VALOR BASE"].sum().reset_index()
+
+# Variation analysis (always uses full unfiltered pair for MoM)
+all_meses = sorted(st.session_state.loaded_months.keys(),
+                   key=lambda m: MONTH_ORDER.index(m) if m in MONTH_ORDER else 99)
+variation_data = []
+if len(all_meses) >= 2:
+    for i in range(1, len(all_meses)):
+        m_prev = all_meses[i-1]
+        m_curr = all_meses[i]
+        df_prev = st.session_state.loaded_months[m_prev]
+        df_curr = st.session_state.loaded_months[m_curr]
+        if sel_entidade:
+            df_prev = df_prev[df_prev["ENTIDADE"].isin(sel_entidade)]
+            df_curr = df_curr[df_curr["ENTIDADE"].isin(sel_entidade)]
+
+        df_prev["KEY"] = df_prev["ENTIDADE"].astype(str)+"||"+df_prev["CONVÊNIO"].astype(str)+"||"+df_prev["DATA BASE - VENCIMENTO"].astype(str)
+        df_curr["KEY"] = df_curr["ENTIDADE"].astype(str)+"||"+df_curr["CONVÊNIO"].astype(str)+"||"+df_curr["DATA BASE - VENCIMENTO"].astype(str)
+
+        p_agg = df_prev.groupby("KEY")["VALOR BASE"].sum()
+        c_agg = df_curr.groupby("KEY")["VALOR BASE"].sum()
+        merged = pd.concat([p_agg, c_agg], axis=1, keys=["prev","curr"]).fillna(0)
+        merged["VARIACAO"] = merged.apply(
+            lambda r: "Novos Títulos" if r["prev"]==0 else ("Recebimento Completo" if r["curr"]==0 else "Em Aberto"), axis=1)
+        variation_data.append({
+            "pair": f"{m_prev} → {m_curr}",
+            "m_prev": m_prev,
+            "m_curr": m_curr,
+            "novos":    merged[merged["VARIACAO"]=="Novos Títulos"]["curr"].sum(),
+            "aberto":   merged[merged["VARIACAO"]=="Em Aberto"]["curr"].sum(),
+            "recebido": merged[merged["VARIACAO"]=="Recebimento Completo"]["prev"].sum(),
+        })
+
+# ─────────────────────────────────────────────────────────────
+#  KPIs
+# ─────────────────────────────────────────────────────────────
+last_mes = meses_sorted[-1] if meses_sorted else None
+prev_mes = meses_sorted[-2] if len(meses_sorted) >= 2 else None
+
+total_last = df[df["MES"]==last_mes]["VALOR BASE"].sum() if last_mes else 0
+total_prev = df[df["MES"]==prev_mes]["VALOR BASE"].sum() if prev_mes else 0
+
+vencidos_last = aging_total[(aging_total["MES"]==last_mes)&(aging_total["AGING"]=="To due")]["VALOR BASE"].sum() if last_mes else 0
+vencidos_prev = aging_total[(aging_total["MES"]==prev_mes)&(aging_total["AGING"]=="To due")]["VALOR BASE"].sum() if prev_mes else 0
+
+over365 = aging_total[(aging_total["MES"]==last_mes)&(aging_total["AGING"]=="Over 365 days")]["VALOR BASE"].sum() if last_mes else 0
+
+recebido = variation_data[-1]["recebido"] if variation_data else 0
+novos    = variation_data[-1]["novos"]    if variation_data else 0
+
+def delta_html(prev, curr):
+    if not prev: return ""
+    pct = (curr - prev) / prev * 100
+    cls = "delta-up" if pct > 0 else "delta-down"
+    arrow = "▲" if pct > 0 else "▼"
+    return f'<span class="{cls}">{arrow} {abs(pct):.1f}%</span>'
+
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    st.markdown(f"""<div class="kpi-card">
+        <div class="kpi-label">Carteira Total ({last_mes or "—"})</div>
+        <div class="kpi-value">{fmt_brl(total_last)}</div>
+        <div class="kpi-sub">{delta_html(total_prev, total_last)} vs {prev_mes or "—"}</div>
+    </div>""", unsafe_allow_html=True)
+with c2:
+    pct_venc = (vencidos_last/total_last*100) if total_last else 0
+    st.markdown(f"""<div class="kpi-card danger">
+        <div class="kpi-label">Títulos Vencidos (To Due)</div>
+        <div class="kpi-value">{fmt_brl(vencidos_last)}</div>
+        <div class="kpi-sub">{pct_venc:.1f}% da carteira &nbsp; {delta_html(vencidos_prev, vencidos_last)}</div>
+    </div>""", unsafe_allow_html=True)
+with c3:
+    st.markdown(f"""<div class="kpi-card warn">
+        <div class="kpi-label">Acima de 365 dias</div>
+        <div class="kpi-value">{fmt_brl(over365)}</div>
+        <div class="kpi-sub">Risco crítico de irrecuperabilidade</div>
+    </div>""", unsafe_allow_html=True)
+with c4:
+    pair_label = variation_data[-1]["pair"] if variation_data else "—"
+    st.markdown(f"""<div class="kpi-card success">
+        <div class="kpi-label">Recebimento ({pair_label})</div>
+        <div class="kpi-value">{fmt_brl(recebido)}</div>
+        <div class="kpi-sub">Novos títulos: {fmt_brl(novos)}</div>
+    </div>""", unsafe_allow_html=True)
+
+st.markdown("<div style='margin-top:24px'></div>", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────
+#  ROW 1 — Aging Bar + Entity Bar
+# ─────────────────────────────────────────────────────────────
+col_a, col_b = st.columns(2)
+
+with col_a:
+    st.markdown('<div class="section-title">📊 Carteira por Faixa de Vencimento</div>', unsafe_allow_html=True)
+    fig_aging = go.Figure()
+    for i, mes in enumerate(meses_sorted):
+        vals = [aging_total[(aging_total["MES"]==mes)&(aging_total["AGING"]==ag)]["VALOR BASE"].sum()
+                for ag in AGING_ORDER]
+        color = ATHENA_BLUE if i == 0 else ATHENA_SKY
+        fig_aging.add_trace(go.Bar(
+            name=mes, x=AGING_ORDER, y=vals,
+            marker_color=color,
+            hovertemplate="%{x}<br>%{y:,.2f}<extra>" + mes + "</extra>",
+        ))
+    fig_aging.update_layout(
+        barmode="group", height=320, margin=dict(l=0,r=0,t=10,b=60),
+        paper_bgcolor="white", plot_bgcolor="white",
+        legend=dict(orientation="h", y=1.08, x=0),
+        font=dict(family="DM Sans", size=11),
+        xaxis=dict(tickangle=-30, gridcolor="#EDF1F8"),
+        yaxis=dict(gridcolor="#EDF1F8", tickformat=",.0f"),
+    )
+    st.plotly_chart(fig_aging, use_container_width=True)
+
+with col_b:
+    st.markdown('<div class="section-title">🏥 Saldo por Entidade</div>', unsafe_allow_html=True)
+    fig_ent = go.Figure()
+    colors_ent = [ATHENA_BLUE, ATHENA_GOLD]
+    for i, mes in enumerate(meses_sorted):
+        sub = entity_total[entity_total["MES"]==mes]
+        labels = [e.split()[0] + " " + (e.split()[1] if len(e.split())>1 else "")
+                  for e in sub["ENTIDADE"]]
+        fig_ent.add_trace(go.Bar(
+            name=mes, y=labels, x=sub["VALOR BASE"],
+            orientation="h",
+            marker_color=colors_ent[i % len(colors_ent)],
+            hovertemplate="%{y}<br>%{x:,.2f}<extra>" + mes + "</extra>",
+        ))
+    fig_ent.update_layout(
+        barmode="group", height=320, margin=dict(l=0,r=0,t=10,b=10),
+        paper_bgcolor="white", plot_bgcolor="white",
+        legend=dict(orientation="h", y=1.08, x=0),
+        font=dict(family="DM Sans", size=11),
+        xaxis=dict(gridcolor="#EDF1F8", tickformat=",.0f"),
+        yaxis=dict(gridcolor="#EDF1F8"),
+    )
+    st.plotly_chart(fig_ent, use_container_width=True)
+
+# ─────────────────────────────────────────────────────────────
+#  ROW 2 — Line + Variation
+# ─────────────────────────────────────────────────────────────
+col_c, col_d = st.columns([3, 2])
+
+with col_c:
+    st.markdown('<div class="section-title">📈 Evolução da Carteira por Faixa</div>', unsafe_allow_html=True)
+    fig_line = go.Figure()
+    for ag in AGING_ORDER:
+        vals = [aging_total[(aging_total["MES"]==m)&(aging_total["AGING"]==ag)]["VALOR BASE"].sum()
+                for m in meses_sorted]
+        if any(v > 0 for v in vals):
+            fig_line.add_trace(go.Scatter(
+                name=ag, x=meses_sorted, y=vals,
+                mode="lines+markers",
+                line=dict(color=AGING_COLORS[ag], width=2.5),
+                marker=dict(size=7),
+                hovertemplate="%{x}<br>%{y:,.2f}<extra>" + ag + "</extra>",
+            ))
+    fig_line.update_layout(
+        height=300, margin=dict(l=0,r=0,t=10,b=10),
+        paper_bgcolor="white", plot_bgcolor="white",
+        legend=dict(orientation="v", x=1.01, y=1, font=dict(size=10)),
+        font=dict(family="DM Sans", size=11),
+        xaxis=dict(gridcolor="#EDF1F8"),
+        yaxis=dict(gridcolor="#EDF1F8", tickformat=",.0f"),
+    )
+    st.plotly_chart(fig_line, use_container_width=True)
+
+with col_d:
+    st.markdown('<div class="section-title">🔄 Movimento Mês a Mês</div>', unsafe_allow_html=True)
+    if variation_data:
+        vd = variation_data[-1]
+        st.markdown(f"""
+        <div class="var-block var-novos" style="margin-bottom:8px">
+            <div class="var-label-novos">🆕 Novos Títulos</div>
+            <div class="var-value">{fmt_brl(vd["novos"])}</div>
+            <div class="var-sub">Novos em {vd["m_curr"]}</div>
+        </div>
+        <div class="var-block var-aberto" style="margin-bottom:8px">
+            <div class="var-label-aberto">🔄 Em Aberto</div>
+            <div class="var-value">{fmt_brl(vd["aberto"])}</div>
+            <div class="var-sub">Saldo em {vd["m_curr"]}</div>
+        </div>
+        <div class="var-block var-completo">
+            <div class="var-label-completo">✅ Recebimento Completo</div>
+            <div class="var-value">{fmt_brl(vd["recebido"])}</div>
+            <div class="var-sub">Recebido de {vd["m_prev"]}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("Carregue ao menos 2 meses para ver a variação.")
+
+# ─────────────────────────────────────────────────────────────
+#  ROW 3 — Aging Table
+# ─────────────────────────────────────────────────────────────
+st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+st.markdown('<div class="section-title">📋 Tabela de Aging — Consolidado</div>', unsafe_allow_html=True)
+
+table_rows = []
+has_two = len(meses_sorted) >= 2
+m1 = meses_sorted[0] if meses_sorted else None
+m2 = meses_sorted[-1] if has_two else None
+
+for ag in AGING_ORDER:
+    v1 = aging_total[(aging_total["MES"]==m1)&(aging_total["AGING"]==ag)]["VALOR BASE"].sum() if m1 else 0
+    v2 = aging_total[(aging_total["MES"]==m2)&(aging_total["AGING"]==ag)]["VALOR BASE"].sum() if m2 else 0
+    diff = v2 - v1 if has_two else None
+    pct  = (diff / v1 * 100) if (has_two and v1) else None
+    row = {"Faixa": ag, m1: v1}
+    if has_two:
+        row[m2] = v2
+        row["Var. R$"] = diff
+        row["Var. %"] = pct
+    table_rows.append(row)
+
+df_table = pd.DataFrame(table_rows)
+
+# Totals row
+tot_row = {"Faixa": "TOTAL", m1: df_table[m1].sum()}
+if has_two:
+    tot_v2   = df_table[m2].sum()
+    tot_diff = tot_v2 - tot_row[m1]
+    tot_pct  = (tot_diff / tot_row[m1] * 100) if tot_row[m1] else None
+    tot_row.update({m2: tot_v2, "Var. R$": tot_diff, "Var. %": tot_pct})
+df_table = pd.concat([df_table, pd.DataFrame([tot_row])], ignore_index=True)
+
+def style_table(df):
+    def color_var(val):
+        if pd.isna(val) or val == 0: return ""
+        return "color: #E74C3C; font-weight:600" if val > 0 else "color: #27AE60; font-weight:600"
+    styled = df.style
+    if "Var. R$" in df.columns:
+        styled = styled.applymap(color_var, subset=["Var. R$", "Var. %"])
+    num_cols = [c for c in df.columns if c != "Faixa"]
+    fmt_dict = {}
+    for c in num_cols:
+        if c == "Var. %":
+            fmt_dict[c] = lambda v: f"{v:+.1f}%" if pd.notna(v) else "—"
+        else:
+            fmt_dict[c] = lambda v: fmt_full(v) if pd.notna(v) else "—"
+    styled = styled.format(fmt_dict)
+    return styled
+
+st.dataframe(
+    style_table(df_table),
+    use_container_width=True,
+    hide_index=True,
+    height=360,
+)
+
+# ─────────────────────────────────────────────────────────────
+#  ROW 4 — Top Convênios
+# ─────────────────────────────────────────────────────────────
+st.markdown('<div class="section-title" style="margin-top:16px">🤝 Ranking de Convênios</div>', unsafe_allow_html=True)
+
+conv_pivot = convenio_agg.pivot_table(
+    index=["ENTIDADE","CONVÊNIO"], columns="MES", values="VALOR BASE", aggfunc="sum"
+).reset_index().fillna(0)
+
+# Sort by last month
+sort_col = meses_sorted[-1] if meses_sorted else conv_pivot.columns[-1]
+if sort_col in conv_pivot.columns:
+    conv_pivot = conv_pivot.sort_values(sort_col, ascending=False)
+
+# Rename for display
+conv_pivot.columns.name = None
+conv_display = conv_pivot.head(40).copy()
+
+# Format numeric cols
+num_cols = [c for c in conv_display.columns if c not in ["ENTIDADE","CONVÊNIO"]]
+for c in num_cols:
+    conv_display[c] = conv_display[c].apply(fmt_full)
+
+st.dataframe(conv_display, use_container_width=True, hide_index=True, height=400)
+
+# ─────────────────────────────────────────────────────────────
+#  FOOTER
+# ─────────────────────────────────────────────────────────────
+st.markdown("""
+<div style="text-align:center;padding:16px;font-size:11px;color:#5B6E8A;
+            border-top:1px solid #DDE4F0;margin-top:24px">
+    Athena Saúde — Controladoria &nbsp;|&nbsp; Painel de Contas a Receber &nbsp;|&nbsp; 2025
+</div>
+""", unsafe_allow_html=True)
